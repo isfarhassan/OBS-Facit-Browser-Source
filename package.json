@@ -1,0 +1,7 @@
+{
+  "name": "faceit-stats-api",
+  "private": true,
+  "devDependencies": {
+    "@vercel/node": "^3.2.29"
+  }
+}
