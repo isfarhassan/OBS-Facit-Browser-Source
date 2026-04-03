@@ -56,7 +56,11 @@ export default async function handler(
     return;
   }
   const statsUrl = `https://open.faceit.com/data/v4/players/${encodeURIComponent(playerId)}/stats/cs2`;
-  const statsRes = await fetch(statsUrl, { headers: faceitHeaders(token) });
+  const historyUrl = `https://open.faceit.com/data/v4/players/${encodeURIComponent(playerId)}/history?game=cs2&limit=20&offset=0`;
+  const [statsRes, historyRes] = await Promise.all([
+    fetch(statsUrl, { headers: faceitHeaders(token) }),
+    fetch(historyUrl, { headers: faceitHeaders(token) }),
+  ]);
   if (!statsRes.ok) {
     res.status(502).json({ error: "Faceit stats service error" });
     return;
@@ -69,10 +73,68 @@ export default async function handler(
   const matches = lifetime["Matches"];
   const winrate = lifetime["Win Rate %"];
   const elo = player.games?.cs2?.faceit_elo;
+  let recent: ("W" | "L")[] = [];
+  if (historyRes.ok) {
+    const historyJson = (await historyRes.json()) as {
+      items?: Array<{
+        finished_at?: number;
+        teams?: Record<
+          string,
+          { players?: Array<{ player_id?: string }> }
+        >;
+        results?: { winner?: string };
+      }>;
+    };
+    const items = historyJson.items ?? [];
+    const sorted = [...items].sort(
+      (a, b) => (b.finished_at ?? 0) - (a.finished_at ?? 0),
+    );
+    for (const m of sorted.slice(0, 10)) {
+      const o = outcomeForPlayer(m, playerId);
+      if (o) recent.push(o);
+    }
+  }
   res.status(200).json({
     elo: elo ?? null,
     kd: kd ?? null,
     matches: matches ?? null,
     winrate: winrate ?? null,
+    recent,
   });
+}
+
+type HistoryMatch = {
+  teams?: Record<string, { players?: Array<{ player_id?: string }> }>;
+  results?: { winner?: string };
+};
+
+function outcomeForPlayer(
+  match: HistoryMatch,
+  faceitPlayerId: string,
+): "W" | "L" | null {
+  const winner = match.results?.winner;
+  const teams = match.teams;
+  if (!winner || !teams) {
+    return null;
+  }
+  let faction: string | null = null;
+  for (const fid of Object.keys(teams)) {
+    const pl = teams[fid]?.players;
+    if (!pl) {
+      continue;
+    }
+    for (let i = 0; i < pl.length; i++) {
+      if (pl[i]?.player_id === faceitPlayerId) {
+        faction = fid;
+        break;
+      }
+    }
+    if (faction) {
+      break;
+    }
+  }
+  if (!faction) {
+    return null;
+  }
+  return winner === faction ? "W" : "L";
 }
